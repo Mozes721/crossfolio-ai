@@ -1,0 +1,9 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+TRADING_212_BASE_URL = os.getenv("TRADING_212_BASE_URL")
+TRADING_212_ACCESS_KEY = os.getenv("TRADING_212_STORAGE_ACCESS_KEY") or os.getenv("TRADING_212_ACCESS_KEY")
+TRADING_212_SECRET_KEY = os.getenv("TRADING_212_SECRET_STORAGE_ACCESS_KEY") or os.getenv("TRADING_212_SECRET_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
