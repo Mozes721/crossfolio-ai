@@ -1,33 +1,46 @@
-from openai import OpenAI
-from typing import Any
+import os
+from dotenv import load_dotenv
+from openrouter import OpenRouter
+from domain.models import Portfolio
+
+load_dotenv()
 
 
-class OpenAIAgent:
-    def __init__(self, system_prompt: str = "You are a helpful assistant."):
-        if not hasattr(OpenAIAgent, 'api_key'):
-            from config.constants import OPENAI_API_KEY
-            if not OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY is not set")
-            OpenAIAgent.api_key = OPENAI_API_KEY
+class LLMService:
+    """Simplified LLM service following OpenRouter SDK pattern."""
+    
+    def __init__(self, system_prompt: str = "You are a helpful assistant.", model: str = "openai/gpt-4o-mini", portfolio: Portfolio | None = None):
+        self.client = OpenRouter(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = model
+        self.messages = [{"role": "system", "content": system_prompt}]
         
-        self.client = OpenAI(api_key=OpenAIAgent.api_key)
-        self.system_prompt = system_prompt
-        self.conversation_history = [
-            {"role": "system", "content": system_prompt}
-        ]
-
-    def ask(self, question: str) -> str:
-        self.conversation_history.append({"role": "user", "content": question})
-        
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=self.conversation_history,
-                temperature=0.7,
-                max_tokens=1000
+        if portfolio:
+            # Format positions as a simple list with calculated values
+            positions_list = []
+            for i, pos in enumerate(portfolio.positions, 1):
+                positions_list.append(
+                    f"{i}. {pos.ticker}: {pos.quantity} shares @ ${pos.current_price:.2f}/share = ${pos.market_value:.2f}"
+                )
+            
+            portfolio_summary = (
+                f"My portfolio (all values in USD):\n"
+                f"Total portfolio value: ${portfolio.total_value:.2f}\n"
+                f"Number of positions: {len(portfolio.positions)}\n\n"
+                f"Positions:\n" + "\n".join(positions_list) + "\n\n"
+                f"Note: All market values are pre-calculated. Use the values shown above."
             )
-            answer = response.choices[0].message.content
-            self.conversation_history.append({"role": "assistant", "content": answer})
-            return answer
-        except Exception as e:
-            raise ConnectionError(f"Failed to get response from OpenAI: {e}")
+            self.messages.append({"role": "user", "content": portfolio_summary})
+
+    def ask(self, question: str, model: str | None = None) -> str:
+        self.messages.append({"role": "user", "content": question})
+        
+        response = self.client.chat.send(
+            model=model or self.model,
+            messages=self.messages,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        answer = response.choices[0].message.content
+        self.messages.append({"role": "assistant", "content": answer})
+        return answer

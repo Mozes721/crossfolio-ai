@@ -1,97 +1,41 @@
-import os
-from trading212 import Trading212 as T212Client
-from trading212.models import Position as T212Position
-from domain.repositories import PortfolioRepository
-from domain.entities import Portfolio, Position
-from domain.value_objects import Ticker, Quantity, Price, AssetClass, Sector
+import base64
+import requests
+from domain.models import Portfolio, Position, AssetClass, Sector
 
 
-class Trading212Client(PortfolioRepository):
-    def __init__(self, base_url: str, access_key: str, secret_key: str):
-        self.use_mock = os.environ.get("MOCK_TRADING212", "false").lower() == "true"
-        
-        if not self.use_mock:
-            if not access_key:
-                raise ValueError("Trading212 API key is required in non-mock mode")
-            
-            host = "live.trading212.com"
-            if base_url and "demo" in base_url.lower():
-                host = "demo.trading212.com"
-            
-            self.client = T212Client(api_key=access_key, host=host)
+class Trading212Client:
+    def __init__(self, api_key: str, secret_key: str | None = None, base_url: str | None = None):
+        if secret_key:
+            credentials = f"{api_key}:{secret_key}"
+            self.auth_header = f"Basic {base64.b64encode(credentials.encode()).decode()}"
         else:
-            self.client = None
+            self.auth_header = api_key if api_key.startswith("Basic ") else f"Basic {api_key}"
+        
+        host = "demo.trading212.com" if base_url and "demo" in base_url.lower() else "live.trading212.com"
+        self.base_url = f"https://{host}/api/v0"
 
     def get_portfolio(self) -> Portfolio:
-        if self.use_mock:
-            return self._get_mock_portfolio()
-        
-        try:
-            t212_positions = self.client.fetch_all_open_positions()
-            return self._convert_to_domain_portfolio(t212_positions)
-        except Exception as e:
-            raise ConnectionError(f"Failed to fetch portfolio from Trading212: {e}")
+        endpoint = f"{self.base_url}/equity/portfolio"
+        response = requests.get(endpoint, headers={"Authorization": self.auth_header})
+        response.raise_for_status()
+        raw_positions = response.json()
+        return self._convert_to_domain_portfolio(raw_positions)
 
-    def _convert_to_domain_portfolio(self, t212_positions: list) -> Portfolio:
+    def _convert_to_domain_portfolio(self, raw_positions: list) -> Portfolio:
         positions = []
         
-        for t212_pos in t212_positions:
+        for pos_data in raw_positions:
             position = Position(
-                ticker=Ticker(symbol=t212_pos.ticker),
-                quantity=Quantity(value=int(t212_pos.quantity)),
-                avg_price=Price(value=t212_pos.averagePrice),
-                current_price=Price(value=t212_pos.currentPrice),
-                asset_class=AssetClass.OTHER,
-                sector=Sector.OTHER
+                ticker=pos_data.get("ticker", ""),
+                quantity=float(pos_data.get("quantity", 0)),
+                avg_price=float(pos_data.get("averagePrice", 0)),
+                current_price=float(pos_data.get("currentPrice", 0)),
+                asset_class=self._map_asset_class(pos_data.get("asset_class")),
+                sector=self._map_sector(pos_data.get("sector"))
             )
             positions.append(position)
         
         return Portfolio(positions=positions)
-
-    def _get_mock_portfolio(self) -> Portfolio:
-        mock_positions = [
-            Position(
-                ticker=Ticker(symbol="AAPL"),
-                quantity=Quantity(value=10),
-                avg_price=Price(value=150.0),
-                current_price=Price(value=195.0),
-                asset_class=AssetClass.STOCK,
-                sector=Sector.TECHNOLOGY
-            ),
-            Position(
-                ticker=Ticker(symbol="MSFT"),
-                quantity=Quantity(value=5),
-                avg_price=Price(value=250.0),
-                current_price=Price(value=380.0),
-                asset_class=AssetClass.STOCK,
-                sector=Sector.TECHNOLOGY
-            ),
-            Position(
-                ticker=Ticker(symbol="JNJ"),
-                quantity=Quantity(value=20),
-                avg_price=Price(value=160.0),
-                current_price=Price(value=155.0),
-                asset_class=AssetClass.STOCK,
-                sector=Sector.HEALTHCARE
-            ),
-            Position(
-                ticker=Ticker(symbol="VOO"),
-                quantity=Quantity(value=15),
-                avg_price=Price(value=400.0),
-                current_price=Price(value=450.0),
-                asset_class=AssetClass.ETF,
-                sector=Sector.OTHER
-            ),
-            Position(
-                ticker=Ticker(symbol="BTC"),
-                quantity=Quantity(value=2),
-                avg_price=Price(value=30000.0),
-                current_price=Price(value=43000.0),
-                asset_class=AssetClass.CRYPTO,
-                sector=Sector.OTHER
-            ),
-        ]
-        return Portfolio(positions=mock_positions)
 
     def _map_asset_class(self, asset_class: str) -> AssetClass:
         mapping = {
@@ -102,7 +46,7 @@ class Trading212Client(PortfolioRepository):
             "commodity": AssetClass.COMMODITY,
             "cash": AssetClass.CASH,
         }
-        return mapping.get(asset_class.lower(), AssetClass.OTHER)
+        return mapping.get(str(asset_class).lower(), AssetClass.OTHER)
 
     def _map_sector(self, sector: str) -> Sector:
         mapping = {
@@ -117,4 +61,4 @@ class Trading212Client(PortfolioRepository):
             "communication": Sector.COMMUNICATION,
             "materials": Sector.MATERIALS,
         }
-        return mapping.get(sector.lower(), Sector.OTHER)
+        return mapping.get(str(sector).lower(), Sector.OTHER)

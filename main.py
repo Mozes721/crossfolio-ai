@@ -1,72 +1,61 @@
-"""Main entry point for the portfolio assessment application.
-Following DDD, this is the composition root where dependencies are wired.
-"""
+import argparse
+import os
+from dotenv import load_dotenv
 from infrastructure.trading212_api import Trading212Client
-from infrastructure.openai_client import OpenAIAgent
-from application.get_portfolio import get_portfolio
-from application.assess_portfolio import assess_portfolio
-from config.constants import (
-    TRADING_212_BASE_URL,
-    TRADING_212_ACCESS_KEY,
-    TRADING_212_SECRET_KEY,
-    OPENAI_API_KEY,
-)
+from infrastructure.kraken_api import KrakenClient
+from infrastructure.openai_client import LLMService
+
+load_dotenv()
 
 
 def main():
-    # Composition root: wire up infrastructure implementations
-    # Following DDD, we inject concrete implementations at the application boundary
+    parser = argparse.ArgumentParser(description='Portfolio Assessment Tool')
+    parser.add_argument('--crypto', action='store_true', help='Use Kraken for crypto portfolio')
+    parser.add_argument('--stock', action='store_true', help='Use Trading212 for stock portfolio')
     
-    # Check if using mock mode
-    import os
-    use_mock = os.environ.get('MOCK_TRADING212', 'false').lower() == 'true'
+    args = parser.parse_args()
     
-    # Validate required configuration (skip if using mock)
-    if not use_mock:
-        if not TRADING_212_BASE_URL:
-            print("Error: TRADING_212_BASE_URL is not set.")
-            print("Please set it in your .env file or environment variables.")
-            print("Or set MOCK_TRADING212=true to use mock data for testing.")
-            return
-        
-        if not TRADING_212_ACCESS_KEY or not TRADING_212_SECRET_KEY:
-            print("Error: Trading212 credentials are not set.")
-            print("Please set TRADING212_STORAGE_ACCESS_KEY and TRADING212_SECRET_STORAGE_ACCESS_KEY in your .env file.")
-            print("Or set MOCK_TRADING212=true to use mock data for testing.")
-            return
-    
-    # Use empty strings for mock mode (they won't be used)
-    portfolio_repository = Trading212Client(
-        base_url=TRADING_212_BASE_URL or "https://placeholder.com",
-        access_key=TRADING_212_ACCESS_KEY or "",
-        secret_key=TRADING_212_SECRET_KEY or "",
-    )
-
-    # Application use cases depend on domain abstractions (interfaces)
-    portfolio = get_portfolio(portfolio_repository)
-    
-    # Validate OpenAI configuration
-    if not OPENAI_API_KEY:
-        print("Error: OPENAI_API_KEY is not set.")
-        print("Please set it in your .env file or environment variables.")
+    if args.crypto:
+        portfolio_client = KrakenClient(
+            api_key=os.getenv("KRAKEN_API_KEY"),
+            private_key=os.getenv("KRAKEN_PRIVATE_KEY")
+        )
+        system_prompt = "You are a professional portfolio risk and allocation analyst on cryptocurrencies."
+    elif args.stock:
+        portfolio_client = Trading212Client(
+            api_key=os.getenv("TRADING_212_ACCESS_KEY"),
+            secret_key=os.getenv("TRADING_212_SECRET_STORAGE_ACCESS_KEY"),
+            base_url=os.getenv("TRADING_212_BASE_URL"),
+        )
+        system_prompt = "You are a professional portfolio risk and allocation analyst on stocks and ETFs."
+    else:
+        print("Error: Please specify either --crypto or --stock")
+        parser.print_help()
         return
     
-    # Create LLM service (infrastructure)
-    llm_service = OpenAIAgent(
-        system_prompt="You are a professional portfolio risk and allocation analyst."
+    portfolio = portfolio_client.get_portfolio()
+    
+    print(f"Portfolio loaded: {len(portfolio.positions)} positions")
+    print(f"Total value: ${portfolio.total_value:,.2f}\n")
+    
+    # Initialize LLM service with portfolio context
+    llm_service = LLMService(
+        system_prompt=system_prompt,
+        model="openai/gpt-4o-mini",
+        portfolio=portfolio
     )
     
-    # Use case depends on protocol, not concrete implementation
-    assessment = assess_portfolio(portfolio, llm_service)
-
-    print("Initial assessment complete.\n")
-
+    # Interactive Q&A loop
     while True:
-        question = input("Ask the agent (or 'exit'): ")
+        question = input("Ask about your portfolio (or 'exit'): ")
         if question.lower() == "exit":
             break
-        answer = assessment.ask(question)
-        print("\n", answer, "\n")
+        
+        try:
+            answer = llm_service.ask(question)
+            print(f"\n{answer}\n")
+        except Exception as e:
+            print(f"\nError: {e}\n")
 
 
 if __name__ == "__main__":
